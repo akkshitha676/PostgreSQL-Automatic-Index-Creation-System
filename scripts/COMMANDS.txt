@@ -1,0 +1,176 @@
+============================================================
+SETUP COMMANDS
+============================================================
+
+Team: Mahathi (23B0965), Gehna (23B1012), Aditi (23B1047), Akkshitha (23B1070)
+
+WHERE TO PUT EACH FILE:
+  nodeSeqscan_patch.c   -> paste contents INTO src/backend/executor/nodeSeqscan.c
+  auto_index_bgworker.c -> src/backend/postmaster/auto_index_bgworker.c  (new - unavoidable)
+  auto_index.h          -> src/include/executor/auto_index.h             (new - unavoidable)
+  test_auto_index.sql   -> run in psql after building
+
+CHANGE FROM PREVIOUS VERSION:
+  All hardcoded thresholds removed. They are now computed from pg_settings:
+    seq_page_cost        -> used to compute max_selectivity and write ratio
+    random_page_cost     -> used in ski rental ICT and write ratio
+    checkpoint_timeout   -> used as decay period for recency weighting
+  This makes the system work correctly on any hardware (SSD vs HDD) and
+  any table size without manual tuning.
+
+FEATURES:
+  FEATURE 1 - Equality tracking             -> nodeSeqscan_patch.c
+  FEATURE 2 - Ski Rental (ICT = N*log2N*R)  -> nodeSeqscan_patch.c
+  FEATURE 3 - Write penalty (formula w/ N)  -> nodeSeqscan_patch.c
+  FEATURE 4 - Range predicate support       -> nodeSeqscan_patch.c
+  FEATURE 5 - Selectivity guard (S/R)       -> nodeSeqscan_patch.c
+  FEATURE 6 - Redundancy check              -> auto_index_bgworker.c
+  FEATURE 7 - CREATE INDEX CONCURRENTLY     -> auto_index_bgworker.c
+  FEATURE 8 - Recency decay (checkpoint_t)  -> nodeSeqscan_patch.c
+  FEATURE 9 - Stale index dropping          -> auto_index_bgworker.c
+
+============================================================
+STEP 1: Download PostgreSQL source
+============================================================
+
+MAC:
+  brew install wget
+  wget https://ftp.postgresql.org/pub/source/v16.0/postgresql-16.0.tar.gz
+  tar -xzf postgresql-16.0.tar.gz
+  cd postgresql-16.0
+
+WINDOWS (WSL):
+  wsl
+  sudo apt-get install wget
+  wget https://ftp.postgresql.org/pub/source/v16.0/postgresql-16.0.tar.gz
+  tar -xzf postgresql-16.0.tar.gz
+  cd postgresql-16.0
+
+============================================================
+STEP 2: Apply code changes
+============================================================
+
+MAC + WINDOWS (WSL):
+
+  cp auto_index_bgworker.c src/backend/postmaster/
+  cp auto_index.h src/include/executor/
+
+  # Edit nodeSeqscan.c - paste the contents of nodeSeqscan_patch.c into it:
+  # MAC:    nano src/backend/executor/nodeSeqscan.c
+  # WINDOWS (WSL): nano src/backend/executor/nodeSeqscan.c
+  #          or:   code src/backend/executor/nodeSeqscan.c  (VS Code)
+
+  # Add ONE LINE at the start of ExecSeqScan() body:
+  #   record_scan_stat(node);
+
+  # Add ONE LINE in each of ExecInsert(), ExecUpdate(), ExecDelete()
+  # in src/backend/executor/execModifyTable.c:
+  #   record_write_stat(RelationGetRelid(resultRelInfo->ri_RelationDesc));
+
+  # Add bgworker registration in src/backend/postmaster/postmaster.c
+  # (see bottom of auto_index_bgworker.c for the exact block to add)
+
+  # Add to src/backend/postmaster/Makefile, find OBJS = and add:
+  #   auto_index_bgworker.o
+
+============================================================
+STEP 3: Build
+============================================================
+
+MAC:
+  brew install readline zlib
+  ./configure --prefix=/usr/local/pgsql --with-readline
+  make -j4
+  sudo make install
+
+WINDOWS (WSL):
+  sudo apt-get install -y build-essential libreadline-dev zlib1g-dev flex bison
+  ./configure --prefix=/usr/local/pgsql --with-readline
+  make -j4
+  sudo make install
+
+============================================================
+STEP 4: Initialize and start database
+============================================================
+
+MAC:
+  sudo mkdir -p /usr/local/pgsql/data
+  sudo chown $USER /usr/local/pgsql/data
+  /usr/local/pgsql/bin/initdb -D /usr/local/pgsql/data
+  /usr/local/pgsql/bin/pg_ctl -D /usr/local/pgsql/data -l /usr/local/pgsql/logfile start
+  /usr/local/pgsql/bin/psql -d postgres
+
+WINDOWS (WSL):
+  sudo mkdir -p /usr/local/pgsql/data
+  sudo chown $USER /usr/local/pgsql/data
+  /usr/local/pgsql/bin/initdb -D /usr/local/pgsql/data
+  /usr/local/pgsql/bin/pg_ctl -D /usr/local/pgsql/data -l /tmp/pg.log start
+  /usr/local/pgsql/bin/psql -d postgres
+
+============================================================
+STEP 5: Stop database
+============================================================
+
+MAC:    /usr/local/pgsql/bin/pg_ctl -D /usr/local/pgsql/data stop
+WINDOWS (WSL): /usr/local/pgsql/bin/pg_ctl -D /usr/local/pgsql/data stop
+
+============================================================
+STEP 6: Download Kaggle dataset
+============================================================
+
+MAC:
+  pip3 install kaggle
+  # Put kaggle.json at ~/.kaggle/kaggle.json
+  kaggle datasets download -d olistbr/brazilian-ecommerce
+  unzip brazilian-ecommerce.zip -d ~/ecommerce_data/
+
+WINDOWS (PowerShell):
+  pip install kaggle
+  # Put kaggle.json at C:\Users\YourName\.kaggle\kaggle.json
+  kaggle datasets download -d olistbr/brazilian-ecommerce
+  # Or download manually from Kaggle website
+
+============================================================
+STEP 7: Enable DEBUG logs to see threshold computation messages
+============================================================
+
+MAC:
+  echo "log_min_messages = debug1" >> /usr/local/pgsql/data/postgresql.conf
+  /usr/local/pgsql/bin/pg_ctl -D /usr/local/pgsql/data reload
+  tail -f /usr/local/pgsql/logfile | grep auto_index
+
+WINDOWS (WSL):
+  echo "log_min_messages = debug1" >> /usr/local/pgsql/data/postgresql.conf
+  /usr/local/pgsql/bin/pg_ctl -D /usr/local/pgsql/data reload
+  tail -f /tmp/pg.log | grep auto_index
+
+Expected log output:
+  DEBUG: auto_index: thresholds computed: seq_page_cost=1.00 random_page_cost=4.00 max_selectivity=0.250 decay_seconds=300
+  LOG:   auto_index: table OID 12345 col 5: scan cost 9800.0 >= index build cost 9600.0 (N=1000, log2N=10.0, R=4.00)...
+  LOG:   auto_index: creating index (predicate: equality): CREATE INDEX CONCURRENTLY IF NOT EXISTS auto_idx_olist_customers_customer_state ...
+  DEBUG: auto_index: table OID X col Y: applied 1 decay(s), cost now 4900.0 (decay_seconds=300 from checkpoint_timeout)
+
+============================================================
+COMMON ERRORS
+============================================================
+
+Error: "readline not found"
+  MAC:           brew install readline
+                 ./configure --with-readline --with-libraries=/usr/local/opt/readline/lib --with-includes=/usr/local/opt/readline/include
+  WINDOWS (WSL): sudo apt-get install libreadline-dev
+
+Error: "could not connect to server"
+  Run the pg_ctl start command from Step 4 first.
+
+Error: "permission denied on /usr/local/pgsql"
+  MAC + WINDOWS (WSL): sudo chown -R $USER /usr/local/pgsql
+
+Error: "log2 undefined" in nodeSeqscan.c
+  Add to the includes: #include "math.h"
+  And add -lm to the Makefile link flags.
+
+Error: "SPI_connect undefined"
+  Add to nodeSeqscan.c includes: #include "executor/spi.h"
+
+Error: "GetCurrentTimestamp undefined"
+  Add: #include "utils/timestamp.h"
