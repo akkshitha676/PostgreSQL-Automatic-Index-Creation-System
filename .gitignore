@@ -1,2 +1,50 @@
-automatic_threshold/pg-log/
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+
+# Build files
+*.o
+*.so
+*.a
+*.out
+*.exe
+
+# Logs
 *.log
+
+# Archives
+*.zip
+*.tar
+*.gz
+
+# PostgreSQL generated data
+pg-data/
+data/
+base/
+global/
+pg_wal/
+pg_stat/
+pg_tblspc/
+pg_multixact/
+pg_notify/
+pg_replslot/
+pg_serial/
+pg_snapshots/
+pg_subtrans/
+pg_twophase/
+pg_xact/
+
+# Dataset
+dataset/*.csv
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+
+# Windows alternate data streams
+*:Zone.Identifier
